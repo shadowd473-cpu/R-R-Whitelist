@@ -1,64 +1,84 @@
 import discord
 import os
 
+# ====================== INTENTS ======================
 intents = discord.Intents.default()
-intents.message_content = True   # Required to read messages
-intents.members = True           # Required to manage roles
+intents.message_content = True   # Needed to read message content
+intents.members = True           # Needed to manage roles
+intents.guilds = True            # Critical for on_message + guild access
 
 client = discord.Client(intents=intents)
 
-# === CONFIGURATION via Environment Variables (set these on Railway) ===
-CHANNEL_ID = os.getenv("WL_CHANNEL_ID")          # Must be a string of the channel ID
-WHITELIST_ROLE_ID = os.getenv("WL_ROLE_ID")      # Must be a string of the role ID
-TRIGGER_WORD = os.getenv("WL_TRIGGER", "wl").lower()  # Default is "wl", you can change it
+# ====================== CONFIG ======================
+CHANNEL_ID = os.getenv("WL_CHANNEL_ID")          # Channel where users type the trigger
+WHITELIST_ROLE_ID = os.getenv("WL_ROLE_ID")      # Role to give
+TRIGGER_WORD = os.getenv("WL_TRIGGER", "wl").lower().strip()
 
 @client.event
 async def on_ready():
     print(f'✅ Bot is online as {client.user}')
-    print(f'📍 Watching channel ID: {CHANNEL_ID}')
+    print(f'📍 Watching channel: {CHANNEL_ID}')
     print(f'🎖️  Whitelist role ID: {WHITELIST_ROLE_ID}')
     print(f'🔍 Trigger word: "{TRIGGER_WORD}"')
 
+
 @client.event
 async def on_message(message):
-    if message.author.bot:
+    # Skip bots and DMs
+    if message.author.bot or message.guild is None:
         return
 
-    # Only respond in the configured channel
+    # Only work in the specified channel
     if str(message.channel.id) != CHANNEL_ID:
         return
 
-    # Check for the trigger word (case-insensitive)
-    if TRIGGER_WORD in message.content.lower():
-        # Get the role using ID (more reliable than name)
-        role = message.guild.get_role(int(WHITELIST_ROLE_ID))
-        
-        if role is None:
-            print(f"⚠️ Role with ID {WHITELIST_ROLE_ID} not found!")
-            return
+    # Check trigger word (exact match - safest for whitelist)
+    if message.content.lower().strip() != TRIGGER_WORD:
+        return
 
-        # Add the role if the user doesn't have it
-        if role not in message.author.roles:
-            try:
-                await message.author.add_roles(role)
-                print(f"✅ Added {role.name} role to {message.author}")
-            except discord.Forbidden:
-                print("❌ Bot doesn't have permission to add this role (check role hierarchy)")
-            except Exception as e:
-                print(f"❌ Error adding role: {e}")
+    # Get role safely
+    try:
+        role_id = int(WHITELIST_ROLE_ID)
+        role = message.guild.get_role(role_id)
+    except (TypeError, ValueError):
+        print("❌ WL_ROLE_ID environment variable is not a valid number!")
+        return
 
-        # Add ✅ reaction to the message
+    if role is None:
+        print(f"⚠️ Role with ID {WHITELIST_ROLE_ID} was not found in the server!")
+        return
+
+    # Add role if user doesn't have it already
+    if role not in message.author.roles:
         try:
-            await message.add_reaction("✅")
+            await message.author.add_roles(role)
+            print(f"✅ Added '{role.name}' role to {message.author} ({message.author.id})")
+        except discord.Forbidden:
+            print("❌ Cannot add role: Bot is below the role in hierarchy or missing 'Manage Roles' permission")
+        except discord.HTTPException as e:
+            print(f"❌ HTTP error while adding role: {e}")
         except Exception as e:
-            print(f"❌ Error adding reaction: {e}")
+            print(f"❌ Unexpected error adding role: {e}")
+    else:
+        print(f"ℹ️  {message.author} already has the '{role.name}' role")
 
-# Run the bot
+    # Add reaction to confirm
+    try:
+        await message.add_reaction("✅")
+    except Exception as e:
+        print(f"❌ Could not add ✅ reaction: {e}")
+
+
+# ====================== START BOT ======================
 if __name__ == "__main__":
     token = os.getenv("DISCORD_TOKEN")
+
     if not token:
-        print("❌ DISCORD_TOKEN is not set!")
-    elif not CHANNEL_ID or not WHITELIST_ROLE_ID:
-        print("❌ Missing WL_CHANNEL_ID or WL_ROLE_ID environment variables!")
+        print("❌ DISCORD_TOKEN environment variable is missing!")
+    elif not CHANNEL_ID:
+        print("❌ WL_CHANNEL_ID environment variable is missing!")
+    elif not WHITELIST_ROLE_ID:
+        print("❌ WL_ROLE_ID environment variable is missing!")
     else:
+        print("🚀 Starting whitelist bot...")
         client.run(token)
